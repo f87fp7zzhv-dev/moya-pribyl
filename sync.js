@@ -23,10 +23,25 @@
   const ready = () => { const c = config(); return /^https:\/\//i.test(c.url) && Boolean(c.anon); };
   const readSession = () => { try { return JSON.parse(localStorage.getItem(sessionKey) || 'null'); } catch { return null; } };
   const writeSession = value => { session = value; if (value) localStorage.setItem(sessionKey, JSON.stringify(value)); else localStorage.removeItem(sessionKey); };
-  const headers = token => ({ apikey: config().anon, Authorization: `Bearer ${token || config().anon}`, 'Content-Type': 'application/json' });
+  // Publishable keys are API keys, not JWTs. Send them only as `apikey`;
+  // Authorization is reserved for the user's access token after sign-in.
+  const headers = token => ({
+    apikey: config().anon,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    'Content-Type': 'application/json'
+  });
   async function request(path, options = {}, token) {
     const response = await fetch(config().url + path, { ...options, headers: { ...headers(token), ...(options.headers || {}) } });
-    if (!response.ok) throw new Error(`Supabase ${response.status}`);
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const body = await response.json();
+        detail = body.msg || body.message || body.error_description || body.error || '';
+      } catch {}
+      const error = new Error(detail || `HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
     return response.status === 204 ? null : response.json();
   }
   async function refreshSession() {
@@ -167,7 +182,10 @@
       const redirect = encodeURIComponent(location.origin + location.pathname);
       await request(`/auth/v1/otp?redirect_to=${redirect}`, { method: 'POST', body: JSON.stringify({ email, create_user: true }) });
       status('Ссылка отправлена. Откройте письмо на этом устройстве и нажмите её для входа.');
-    } catch { status('Не удалось отправить письмо. Проверьте URL, публичный ключ и настройки Auth в Supabase.'); }
+    } catch (error) {
+      const detail = error?.message || 'неизвестная ошибка';
+      status(`Supabase не отправил ссылку (${error?.status || 'сетевая ошибка'}): ${detail}`);
+    }
   }
   function signOut() {
     clearInterval(pollTimer);
