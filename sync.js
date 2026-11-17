@@ -8,6 +8,14 @@
   let busy = false;
   const $ = selector => document.querySelector(selector);
   const status = text => { const el = $('#syncStatus'); if (el) el.textContent = text; };
+  const hasFinanceData = data => Boolean(
+    (data?.entries?.length || 0) +
+    (data?.recurring?.length || 0) +
+    (data?.expenses?.length || 0) +
+    (data?.paymentReminders?.length || 0) +
+    Object.keys(data?.budgets || {}).length ||
+    Number(data?.savings) > 0
+  );
   const config = () => ({
     url: (localStorage.getItem(cfgKeys.url) || '').replace(/\/$/, ''),
     anon: localStorage.getItem(cfgKeys.anon) || ''
@@ -65,18 +73,40 @@
     try {
       const rows = await request(`/rest/v1/profit_sync?select=payload,updated_at&user_id=eq.${encodeURIComponent(session.user.id)}`, {}, session.access_token);
       const row = Array.isArray(rows) ? rows[0] : null;
-      if (!row) { busy = false; await pushRemote(window.profitSyncBridge.snapshot()); enablePolling(); return; }
+      const localSnapshot = window.profitSyncBridge.snapshot();
+      const localHasData = hasFinanceData(localSnapshot);
+      if (!row) {
+        if (localHasData) {
+          busy = false;
+          await pushRemote(localSnapshot);
+        } else {
+          status('Подключено. В облаке пока нет записей. Откройте приложение на устройстве с вашими доходами или тратами, чтобы загрузить их.');
+        }
+        enablePolling();
+        return;
+      }
       if (row.updated_at && row.updated_at !== lastRemoteUpdatedAt) {
+        const remoteHasData = hasFinanceData(row.payload || {});
         const localAt = Number(localStorage.getItem('profitLocalUpdatedAt') || 0);
         const remoteAt = Date.parse(row.updated_at) || 0;
-        if (remoteAt > localAt + 1200) {
+        if (remoteHasData && !localHasData) {
+          lastRemoteUpdatedAt = row.updated_at;
+          window.profitSyncBridge.applySnapshot(row.payload || {});
+          localStorage.setItem('profitLocalUpdatedAt', String(remoteAt));
+          status('Данные обновлены из облака.');
+        } else if (localHasData && !remoteHasData) {
+          busy = false;
+          await pushRemote(localSnapshot);
+          enablePolling();
+          return;
+        } else if (remoteAt > localAt + 1200) {
           lastRemoteUpdatedAt = row.updated_at;
           window.profitSyncBridge.applySnapshot(row.payload || {});
           localStorage.setItem('profitLocalUpdatedAt', String(remoteAt));
           status('Данные обновлены из облака.');
         } else if (localAt > remoteAt + 1200) {
           busy = false;
-          await pushRemote(window.profitSyncBridge.snapshot());
+          await pushRemote(localSnapshot);
           enablePolling();
           return;
         }
