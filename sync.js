@@ -187,6 +187,32 @@
       status(`Supabase не отправил ссылку (${error?.status || 'сетевая ошибка'}): ${detail}`);
     }
   }
+  async function passwordAuth(signUp) {
+    if (!ready()) { status('Сначала сохраните настройки Supabase.'); return; }
+    const email = ($('#syncEmail')?.value || '').trim();
+    const password = $('#syncPassword')?.value || '';
+    if (!email || !email.includes('@')) { status('Введите корректный e-mail.'); return; }
+    if (password.length < 8) { status('Введите пароль длиной не менее 8 символов.'); return; }
+    status(signUp ? 'Создаю аккаунт…' : 'Выполняю вход…');
+    try {
+      const body = await request(signUp ? '/auth/v1/signup' : '/auth/v1/token?grant_type=password', {
+        method: 'POST', body: JSON.stringify({ email, password })
+      });
+      $('#syncPassword').value = '';
+      if (body?.access_token && body?.refresh_token) {
+        writeSession({ ...body, expires_at: Math.floor(Date.now() / 1000) + Number(body.expires_in || 3600) });
+        status('Вход выполнен. Подключаю данные…');
+        await startSync();
+      } else if (signUp) {
+        status('Аккаунт создан. Подтверди e-mail по ссылке из письма, затем войди с паролем.');
+      } else {
+        status('Аккаунт создан без сессии. Проверь подтверждение e-mail или повтори вход.');
+      }
+    } catch (error) {
+      $('#syncPassword').value = '';
+      status(`Не удалось ${signUp ? 'создать аккаунт' : 'войти'} (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
+    }
+  }
   function signOut() {
     clearInterval(pollTimer);
     clearTimeout(saveTimer);
@@ -200,6 +226,8 @@
     if ($('#supabaseAnonKey')) $('#supabaseAnonKey').value = c.anon;
     $('#saveSupabaseConfig')?.addEventListener('click', saveConfig);
     $('#syncSignIn')?.addEventListener('click', sendMagicLink);
+    $('#syncPasswordSignIn')?.addEventListener('click', () => passwordAuth(false));
+    $('#syncSignUp')?.addEventListener('click', () => passwordAuth(true));
     $('#syncSignOut')?.addEventListener('click', signOut);
     updateControls();
     if (!ready()) { status('Облачное подключение Supabase ещё не настроено. Создайте проект, затем введите его URL и публичный ключ.'); return; }
