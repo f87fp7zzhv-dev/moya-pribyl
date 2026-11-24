@@ -190,12 +190,14 @@
     const accessToken = hash.get('access_token');
     const refreshToken = hash.get('refresh_token');
     if (!accessToken || !refreshToken) return false;
+    const recovery = hash.get('type') === 'recovery';
     const expiresIn = Number(hash.get('expires_in') || 3600);
     writeSession({ access_token: accessToken, refresh_token: refreshToken, expires_at: Math.floor(Date.now() / 1000) + expiresIn });
     history.replaceState(null, '', location.pathname + location.search);
-    status('Вход подтверждён. Подключаю облако…');
+    status(recovery ? 'Ссылка подтверждена. Задайте новый пароль.' : 'Вход подтверждён. Подключаю облако…');
     await startSync();
-    notifySignedIn();
+    if (recovery) $('#passwordModal')?.classList.add('open');
+    else notifySignedIn();
     return true;
   }
   function saveConfig() {
@@ -239,6 +241,33 @@
       status(`Не удалось ${signUp ? 'создать аккаунт' : 'войти'} (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
     }
   }
+  async function recoverPassword() {
+    if (!ready()) { status('Подключение к Supabase ещё не настроено.'); return; }
+    const email = ($('#syncEmail')?.value || '').trim();
+    if (!email || !email.includes('@')) { status('Введите почту, на которую придёт ссылка для смены пароля.'); return; }
+    status('Отправляю ссылку для смены пароля…');
+    try {
+      const redirect = encodeURIComponent(location.origin + location.pathname);
+      await request(`/auth/v1/recover?redirect_to=${redirect}`, { method: 'POST', body: JSON.stringify({ email }) });
+      status('Ссылка отправлена. Откройте её в почте и задайте новый пароль.');
+    } catch (error) {
+      status(`Не удалось отправить ссылку (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
+    }
+  }
+  async function saveNewPassword() {
+    const password = ($('#newPassword')?.value || '').trim();
+    if (password.length < 8) { status('Введите пароль длиной не менее 8 символов.'); return; }
+    status('Сохраняю новый пароль…');
+    try {
+      await request('/auth/v1/user', { method: 'PUT', body: JSON.stringify({ password }) }, session.access_token);
+      $('#passwordModal')?.classList.remove('open');
+      $('#newPassword').value = '';
+      notifySignedIn();
+      status('Пароль обновлён. Теперь можно входить с ним на всех устройствах.');
+    } catch (error) {
+      status(`Не удалось сменить пароль (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
+    }
+  }
   function signOut() {
     clearInterval(pollTimer);
     clearTimeout(saveTimer);
@@ -252,6 +281,9 @@
     if ($('#supabaseUrl')) $('#supabaseUrl').value = c.url;
     if ($('#supabaseAnonKey')) $('#supabaseAnonKey').value = c.anon;
     $('#saveSupabaseConfig')?.addEventListener('click', saveConfig);
+    $('#welcomeRecover')?.addEventListener('click', recoverPassword);
+    $('#saveNewPassword')?.addEventListener('click', saveNewPassword);
+    $('#cancelPassword')?.addEventListener('click', () => $('#passwordModal')?.classList.remove('open'));
     updateControls();
     if (!ready()) { status('Чтобы входить на всех устройствах, откройте «Настройки подключения» и укажите адрес проекта Supabase и публичный ключ.'); return; }
     if (await handleMagicLink()) return;
