@@ -1,6 +1,7 @@
 (() => {
   const cfgKeys = { url: 'profitSupabaseUrl', anon: 'profitSupabaseAnonKey' };
   const sessionKey = 'profitSupabaseSession';
+  const lastSyncedKey = 'profitLastSyncedAt';
   let session = null;
   let lastRemoteUpdatedAt = '';
   let saveTimer = 0;
@@ -16,13 +17,36 @@
     Object.keys(data?.budgets || {}).length ||
     Number(data?.savings) > 0
   );
+  // On the first sign-in an account can already have data in the cloud while
+  // this device has its own records. Unite them by id instead of letting one
+  // side overwrite the other — that is what used to erase entries.
+  const mergeById = (local, remote) => {
+    const byId = new Map();
+    (Array.isArray(remote) ? remote : []).forEach(x => { if (x && x.id) byId.set(x.id, x); });
+    (Array.isArray(local) ? local : []).forEach(x => { if (x && x.id && !byId.has(x.id)) byId.set(x.id, x); });
+    return [...byId.values()];
+  };
+  const mergeSnapshots = (local, remote) => ({
+    entries: mergeById(local?.entries, remote?.entries),
+    recurring: mergeById(local?.recurring, remote?.recurring),
+    expenses: mergeById(local?.expenses, remote?.expenses),
+    paymentReminders: mergeById(local?.paymentReminders, remote?.paymentReminders),
+    budgets: { ...(remote?.budgets || {}), ...(local?.budgets || {}) },
+    autoSavePercent: Number(local?.autoSavePercent) || Number(remote?.autoSavePercent) || 0,
+    savings: Math.max(Number(local?.savings) || 0, Number(remote?.savings) || 0),
+    goal: Number(local?.goal) || Number(remote?.goal) || 50000
+  });
   const config = () => ({
     url: (localStorage.getItem(cfgKeys.url) || '').replace(/\/$/, ''),
     anon: localStorage.getItem(cfgKeys.anon) || ''
   });
   const ready = () => { const c = config(); return /^https:\/\//i.test(c.url) && Boolean(c.anon); };
   const readSession = () => { try { return JSON.parse(localStorage.getItem(sessionKey) || 'null'); } catch { return null; } };
-  const writeSession = value => { session = value; if (value) localStorage.setItem(sessionKey, JSON.stringify(value)); else localStorage.removeItem(sessionKey); };
+  const writeSession = value => {
+    session = value;
+    if (value) localStorage.setItem(sessionKey, JSON.stringify(value));
+    else localStorage.removeItem(sessionKey);
+  };
   // Publishable keys are API keys, not JWTs. Send them only as `apikey`;
   // Authorization is reserved for the user's access token after sign-in.
   const headers = token => ({
@@ -53,13 +77,18 @@
   }
   async function authenticatedUser() {
     if (!session?.access_token) return null;
-    if (Number(session.expires_at || 0) < Math.floor(Date.now() / 1000) + 60 && !(await refreshSession())) { writeSession(null); return null; }
+    if (Number(session.expires_at || 0) < Math.floor(Date.now() / 1000) + 60 && !(await refreshSession())) { writeSession(null); updateControls(); return null; }
     try { return await request('/auth/v1/user', {}, session.access_token); }
-    catch { if (await refreshSession()) return request('/auth/v1/user', {}, session.access_token); writeSession(null); return null; }
+    catch { if (await refreshSession()) return request('/auth/v1/user', {}, session.access_token); writeSession(null); updateControls(); return null; }
   }
   function updateControls() {
-    const signOut = $('#syncSignOut');
-    if (signOut) signOut.hidden = !session;
+    const signOut = $('#welcomeSignOut');
+    if (signOut) signOut.hidden = !readSession()?.access_token;
+    window.dispatchEvent(new Event('profit-session-changed'));
+  }
+  function notifySignedIn() {
+    window.dispatchEvent(new Event('profit-auth-success'));
+    try { window.profitCloudSync?.onSignedIn?.(); } catch {}
   }
   function enablePolling() {
     clearInterval(pollTimer);
@@ -77,6 +106,7 @@
       const now = new Date().toISOString();
       lastRemoteUpdatedAt = now;
       localStorage.setItem('profitLocalUpdatedAt', String(Date.now()));
+      localStorage.setItem(lastSyncedKey, now);
       status('Синхронизировано. Изменения появятся на других устройствах в течение нескольких секунд.');
     } catch {
       status('Не удалось сохранить в облако. Проверю соединение и попробую ещё раз.');
@@ -90,47 +120,48 @@
       const row = Array.isArray(rows) ? rows[0] : null;
       const localSnapshot = window.profitSyncBridge.snapshot();
       const localHasData = hasFinanceData(localSnapshot);
+      const lastSynced = localStorage.getItem(lastSyncedKey) || '';
+      const localAt = Number(localStorage.getItem('profitLocalUpdatedAt') || 0);
+      const syncedAt = Date.parse(lastSynced) || 0;
       if (!row) {
-        if (localHasData) {
-          busy = false;
-          await pushRemote(localSnapshot);
-        } else {
-          status('Подключено. В облаке пока нет записей. Откройте приложение на устройстве с вашими доходами или тратами, чтобы загрузить их.');
-        }
+        if (localHasData) { busy = false; await pushRemote(localSnapshot); }
+        else status('Подключено. В облаке пока нет записей. Добавьте доход или трату — они появятся на всех устройствах.');
         enablePolling();
         return;
       }
-      if (row.updated_at && row.updated_at !== lastRemoteUpdatedAt) {
-        const remoteHasData = hasFinanceData(row.payload || {});
-        const localAt = Number(localStorage.getItem('profitLocalUpdatedAt') || 0);
-        const remoteAt = Date.parse(row.updated_at) || 0;
-        if (remoteHasData && !localHasData) {
-          lastRemoteUpdatedAt = row.updated_at;
-          window.profitSyncBridge.applySnapshot(row.payload || {});
-          localStorage.setItem('profitLocalUpdatedAt', String(remoteAt));
-          status('Данные обновлены из облака.');
-        } else if (localHasData && !remoteHasData) {
-          busy = false;
-          await pushRemote(localSnapshot);
-          enablePolling();
-          return;
-        } else if (remoteAt > localAt + 1200) {
-          lastRemoteUpdatedAt = row.updated_at;
-          window.profitSyncBridge.applySnapshot(row.payload || {});
-          localStorage.setItem('profitLocalUpdatedAt', String(remoteAt));
-          status('Данные обновлены из облака.');
-        } else if (localAt > remoteAt + 1200) {
-          busy = false;
-          await pushRemote(localSnapshot);
-          enablePolling();
-          return;
-        }
-        lastRemoteUpdatedAt = row.updated_at;
+      const remoteUpdatedAt = row.updated_at || '';
+      const remoteAt = Date.parse(remoteUpdatedAt) || 0;
+      const remoteHasData = hasFinanceData(row.payload || {});
+      const localDirty = !lastSynced || localAt > syncedAt + 1200;
+      if (!lastSynced && localHasData && remoteHasData) {
+        const merged = mergeSnapshots(localSnapshot, row.payload || {});
+        window.profitSyncBridge.applySnapshot(merged);
+        localStorage.setItem(lastSyncedKey, remoteUpdatedAt || new Date().toISOString());
+        busy = false;
+        await pushRemote(merged);
+        status('Данные с двух устройств объединены и сохранены в облаке.');
+        enablePolling();
+        return;
       }
-      status('Синхронизация включена. Проверяю изменения каждые 12 секунд.');
+      if (localDirty && (localHasData || !remoteHasData)) {
+        busy = false;
+        await pushRemote(localSnapshot);
+        enablePolling();
+        return;
+      }
+      if (remoteHasData && remoteAt > syncedAt + 1200) {
+        window.profitSyncBridge.applySnapshot(row.payload || {});
+        localStorage.setItem('profitLocalUpdatedAt', String(remoteAt));
+        localStorage.setItem(lastSyncedKey, remoteUpdatedAt);
+        status('Данные обновлены из облака.');
+      } else {
+        if (!lastSynced) localStorage.setItem(lastSyncedKey, remoteUpdatedAt || new Date().toISOString());
+        status('Синхронизация включена. Проверяю изменения каждые 12 секунд.');
+      }
+      lastRemoteUpdatedAt = remoteUpdatedAt;
       enablePolling();
     } catch {
-      status('Пока не удаётся связаться с Supabase. Проверьте настройки проекта и подключение.');
+      status('Пока не удаётся связаться с Supabase. Проверьте подключение и настройки.');
       enablePolling();
     } finally { busy = false; }
   }
@@ -141,7 +172,7 @@
   }
   async function startSync() {
     const user = await authenticatedUser();
-    if (!user) { updateControls(); status('Сохраните настройки Supabase и войдите по ссылке из письма.'); return; }
+    if (!user) { updateControls(); status('Войдите по почте и паролю, чтобы открыть свои данные.'); return; }
     session = { ...session, user };
     writeSession(session);
     updateControls();
@@ -159,9 +190,10 @@
     history.replaceState(null, '', location.pathname + location.search);
     status('Вход подтверждён. Подключаю облако…');
     await startSync();
+    notifySignedIn();
     return true;
   }
-  async function saveConfig() {
+  function saveConfig() {
     const urlInput = $('#supabaseUrl'), keyInput = $('#supabaseAnonKey');
     const url = (urlInput?.value || '').trim().replace(/\/$/, '');
     const anon = (keyInput?.value || '').trim();
@@ -169,26 +201,13 @@
     if (!anon) { status('Вставьте публичный ключ anon/publishable из настроек проекта.'); return; }
     localStorage.setItem(cfgKeys.url, url);
     localStorage.setItem(cfgKeys.anon, anon);
+    localStorage.removeItem(lastSyncedKey);
     writeSession(null);
     updateControls();
-    status('Настройки сохранены на этом устройстве. Теперь войдите по ссылке из письма.');
-  }
-  async function sendMagicLink() {
-    if (!ready()) { status('Сначала сохраните адрес проекта и публичный ключ Supabase.'); return; }
-    const email = ($('#syncEmail')?.value || '').trim();
-    if (!email || !email.includes('@')) { status('Введите вашу почту, чтобы получить ссылку для входа.'); return; }
-    status('Отправляю ссылку для входа…');
-    try {
-      const redirect = encodeURIComponent(location.origin + location.pathname);
-      await request(`/auth/v1/otp?redirect_to=${redirect}`, { method: 'POST', body: JSON.stringify({ email, create_user: true }) });
-      status('Ссылка отправлена. Откройте письмо на этом устройстве и нажмите её для входа.');
-    } catch (error) {
-      const detail = error?.message || 'неизвестная ошибка';
-      status(`Supabase не отправил ссылку (${error?.status || 'сетевая ошибка'}): ${detail}`);
-    }
+    status('Настройки сохранены на этом устройстве. Теперь войдите по почте и паролю.');
   }
   async function passwordAuth(signUp) {
-    if (!ready()) { status('Сначала сохраните настройки Supabase.'); return; }
+    if (!ready()) { status('Сначала сохраните адрес проекта Supabase и публичный ключ в настройках подключения.'); return; }
     const email = ($('#syncEmail')?.value || '').trim();
     const password = $('#syncPassword')?.value || '';
     if (!email || !email.includes('@')) { status('Введите корректный e-mail.'); return; }
@@ -201,12 +220,14 @@
       $('#syncPassword').value = '';
       if (body?.access_token && body?.refresh_token) {
         writeSession({ ...body, expires_at: Math.floor(Date.now() / 1000) + Number(body.expires_in || 3600) });
+        updateControls();
         status('Вход выполнен. Подключаю данные…');
         await startSync();
+        notifySignedIn();
       } else if (signUp) {
-        status('Аккаунт создан. Подтверди e-mail по ссылке из письма, затем войди с паролем.');
+        status('Аккаунт создан. Подтвердите e-mail по ссылке из письма, затем войдите с паролем.');
       } else {
-        status('Аккаунт создан без сессии. Проверь подтверждение e-mail или повтори вход.');
+        status('Аккаунт создан без сессии. Проверьте подтверждение e-mail или повторите вход.');
       }
     } catch (error) {
       $('#syncPassword').value = '';
@@ -216,27 +237,31 @@
   function signOut() {
     clearInterval(pollTimer);
     clearTimeout(saveTimer);
+    localStorage.removeItem(lastSyncedKey);
     writeSession(null);
     updateControls();
-    status('Синхронизация отключена на этом устройстве. Локальные записи сохранены.');
+    status('Вы вышли из аккаунта. Локальные записи на этом устройстве сохранены.');
   }
   document.addEventListener('DOMContentLoaded', async () => {
     const c = config();
     if ($('#supabaseUrl')) $('#supabaseUrl').value = c.url;
     if ($('#supabaseAnonKey')) $('#supabaseAnonKey').value = c.anon;
     $('#saveSupabaseConfig')?.addEventListener('click', saveConfig);
-    $('#syncSignIn')?.addEventListener('click', sendMagicLink);
-    $('#syncPasswordSignIn')?.addEventListener('click', () => passwordAuth(false));
-    $('#syncSignUp')?.addEventListener('click', () => passwordAuth(true));
-    $('#syncSignOut')?.addEventListener('click', signOut);
     updateControls();
-    if (!ready()) { status('Облачное подключение Supabase ещё не настроено. Создайте проект, затем введите его URL и публичный ключ.'); return; }
+    if (!ready()) { status('Чтобы входить на всех устройствах, откройте «Настройки подключения» и укажите адрес проекта Supabase и публичный ключ.'); return; }
     if (await handleMagicLink()) return;
     session = readSession();
     if (session) await startSync();
-    else status('Supabase настроен. Введите почту и отправьте ссылку для входа.');
+    else status('Введите почту и пароль, чтобы открыть свои данные.');
   });
   window.addEventListener('focus', () => { if (session) pullRemote(); });
   window.addEventListener('online', () => { if (session) pullRemote(); });
-  window.profitCloudSync = { queueSave };
+  window.profitCloudSync = {
+    queueSave,
+    refresh: pullRemote,
+    signOut,
+    passwordSignIn: passwordAuth,
+    isSignedIn: () => Boolean(readSession()?.access_token),
+    onSignedIn: null
+  };
 })();

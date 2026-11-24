@@ -1,4 +1,4 @@
-const CACHE_NAME = "moya-pribyl-pwa-v9";
+const CACHE_NAME = "moya-pribyl-pwa-v11";
 const APP_FILES = [
   "./",
   "./index.html",

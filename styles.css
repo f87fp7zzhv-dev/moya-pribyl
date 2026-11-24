@@ -19,3 +19,15 @@ html:not(.welcome-done) .app{visibility:hidden}
 @keyframes welcome-rise{to{opacity:1;transform:translateY(0) scale(1)}}
 @media(max-width:520px){#welcomeScreen{padding:20px 18px}.welcome-icon{width:106px;height:106px;border-radius:29px}.welcome-title{margin-top:25px}.welcome-subtitle{font-size:14px}.welcome-enter{width:min(100%,320px);margin-top:30px;min-height:54px}}
 @media(prefers-reduced-motion:reduce){#welcomeScreen,.welcome-icon,.welcome-title,.welcome-subtitle,.welcome-enter{animation:none!important;transition:none!important;opacity:1;transform:none}.welcome-enter{pointer-events:auto}.welcome-inner:not(.ready) .welcome-enter{opacity:1}}
+.welcome-login{width:min(100%,360px);margin-top:22px;display:flex;flex-direction:column;gap:2px;text-align:left}
+.welcome-login[hidden],.welcome-config[hidden]{display:none}
+.welcome-login .field{margin-bottom:10px;gap:5px}
+.welcome-login .field label{font-size:11px}
+.welcome-login .welcome-enter{width:100%;min-width:0;margin-top:8px;opacity:1;transform:none;pointer-events:auto}
+.welcome-link{border:0;background:none;color:var(--muted);font-size:12px;text-decoration:underline;text-underline-offset:3px;padding:8px;align-self:center}
+.welcome-link:hover{color:var(--text)}
+.welcome-config{display:flex;flex-direction:column;gap:7px;margin-top:12px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--surface2);text-align:left}
+.welcome-config input{width:100%;min-width:0}
+.welcome-config .small-btn{align-self:flex-start;margin-top:4px}
+.welcome-status{min-height:34px;margin-top:12px;color:var(--muted);font-size:12px;line-height:1.5;text-align:center}
+#welcomeSignOut{margin-top:10px}
