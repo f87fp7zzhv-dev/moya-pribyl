@@ -1,7 +1,9 @@
-const CACHE_NAME = "moya-pribyl-pwa-v8";
+const CACHE_NAME = "moya-pribyl-pwa-v9";
 const APP_FILES = [
   "./",
   "./index.html",
+  "./styles.css",
+  "./app.js",
   "./sync.js",
   "./manifest.webmanifest",
   "./maia-icon.svg",
@@ -24,16 +26,25 @@ self.addEventListener("activate", event => {
 });
 
 self.addEventListener("fetch", event => {
-  if (event.request.method !== "GET") return;
+  const request = event.request;
+  if (request.method !== "GET" || !request.url.startsWith("http")) return;
+  const sameOrigin = new URL(request.url).origin === self.location.origin;
   event.respondWith(
-    fetch(event.request)
+    fetch(request)
       .then(response => {
-        if (response.ok && new URL(event.request.url).origin === self.location.origin) {
+        if (sameOrigin && response.ok) {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+          caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
         }
         return response;
       })
-      .catch(() => caches.match(event.request).then(cached => cached || caches.match("./index.html")))
+      .catch(async () => {
+        const cached = await caches.match(request);
+        if (cached) return cached;
+        // Only navigations may fall back to the app shell. Returning index.html
+        // for a failed API call would hand JSON/HTML to the caller and hide the real error.
+        if (request.mode === "navigate" && sameOrigin) return caches.match("./index.html");
+        return new Response("Offline", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      })
   );
 });
