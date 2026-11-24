@@ -1,5 +1,10 @@
 (() => {
   const cfgKeys = { url: 'profitSupabaseUrl', anon: 'profitSupabaseAnonKey' };
+  // Supabase URL and publishable key are public client-side values; data access
+  // is protected by RLS and by the signed-in user's token. Baked in so sign-in
+  // works on any device without copying settings from the computer.
+  const DEFAULT_URL = 'https://qsqwjpcfluxtlbmmojkv.supabase.co';
+  const DEFAULT_ANON = 'sb_publishable_lB_oSwd4Q_W1dAOJU1QnNQ_Pmf4vTyr';
   const sessionKey = 'profitSupabaseSession';
   const lastSyncedKey = 'profitLastSyncedAt';
   let session = null;
@@ -37,8 +42,8 @@
     goal: Number(local?.goal) || Number(remote?.goal) || 50000
   });
   const config = () => ({
-    url: (localStorage.getItem(cfgKeys.url) || '').replace(/\/$/, ''),
-    anon: localStorage.getItem(cfgKeys.anon) || ''
+    url: (localStorage.getItem(cfgKeys.url) || DEFAULT_URL).replace(/\/$/, ''),
+    anon: localStorage.getItem(cfgKeys.anon) || DEFAULT_ANON
   });
   const ready = () => { const c = config(); return /^https:\/\//i.test(c.url) && Boolean(c.anon); };
   const readSession = () => { try { return JSON.parse(localStorage.getItem(sessionKey) || 'null'); } catch { return null; } };
