@@ -128,8 +128,10 @@
       localStorage.setItem('profitLocalUpdatedAt', String(Date.now()));
       localStorage.setItem(dirtyKey, '0');
       status('Синхронизировано. Изменения появятся на других устройствах в течение нескольких секунд.');
-    } catch {
-      status('Не удалось сохранить в облако. Проверю соединение и попробую ещё раз.');
+    } catch (error) {
+      status(error?.status === 403
+        ? 'Нет прав на запись в облако: выполните SUPABASE-SETUP.sql в SQL Editor Supabase.'
+        : 'Не удалось сохранить в облако. Проверю соединение и попробую ещё раз.');
     } finally {
       busy = false;
       if (pendingPush) { pendingPush = false; setTimeout(() => pushRemote(), 80); }
@@ -187,8 +189,10 @@
       lastRemoteUpdatedAt = remoteUpdatedAt;
       status('Синхронизация включена. Проверяю изменения каждые 12 секунд.');
       enablePolling();
-    } catch {
-      status('Пока не удаётся связаться с Supabase. Проверьте подключение и настройки.');
+    } catch (error) {
+      status(error?.status === 403
+        ? 'Нет доступа к облаку: откройте Supabase → SQL Editor и выполните SUPABASE-SETUP.sql.'
+        : 'Пока не удаётся связаться с Supabase. Проверьте подключение и настройки.');
       enablePolling();
     } finally {
       busy = false;

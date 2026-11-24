@@ -4,6 +4,11 @@ create table if not exists public.profit_sync (
   updated_at timestamptz not null default now()
 );
 
+-- Supabase grants default privileges to `anon`/`authenticated` for new tables
+-- created through the dashboard, but projects with changed defaults need this.
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.profit_sync to authenticated;
+
 alter table public.profit_sync enable row level security;
 
 create policy "Users can read their own finance data"
