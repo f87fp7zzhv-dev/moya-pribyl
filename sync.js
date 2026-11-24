@@ -7,11 +7,13 @@
   const DEFAULT_ANON = 'sb_publishable_lB_oSwd4Q_W1dAOJU1QnNQ_Pmf4vTyr';
   const sessionKey = 'profitSupabaseSession';
   const lastSyncedKey = 'profitLastSyncedAt';
+  const dirtyKey = 'profitLocalDirty';
   let session = null;
   let lastRemoteUpdatedAt = '';
   let saveTimer = 0;
   let pollTimer = 0;
   let busy = false;
+  let pendingPush = false;
   const $ = selector => document.querySelector(selector);
   const status = text => { const el = $('#syncStatus'); if (el) el.textContent = text; };
   const hasFinanceData = data => Boolean(
@@ -87,8 +89,14 @@
     catch { if (await refreshSession()) return request('/auth/v1/user', {}, session.access_token); writeSession(null); updateControls(); return null; }
   }
   function updateControls() {
+    const s = readSession();
     const signOut = $('#welcomeSignOut');
-    if (signOut) signOut.hidden = !readSession()?.access_token;
+    if (signOut) signOut.hidden = !s?.access_token;
+    const account = $('#welcomeAccount');
+    if (account) {
+      account.hidden = !s?.user?.email;
+      account.textContent = s?.user?.email ? 'Вы вошли как ' + s.user.email : '';
+    }
     window.dispatchEvent(new Event('profit-session-changed'));
   }
   function notifySignedIn() {
@@ -100,25 +108,36 @@
     pollTimer = setInterval(() => { if (document.visibilityState === 'visible') pullRemote(); }, 12000);
   }
   async function pushRemote(snapshot) {
-    if (!session || !ready() || busy) return;
+    if (!session || !ready()) return;
+    if (busy) { pendingPush = true; return; }
     busy = true;
     try {
-      await request('/rest/v1/profit_sync?on_conflict=user_id', {
+      const result = await request('/rest/v1/profit_sync?on_conflict=user_id', {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
         body: JSON.stringify({ user_id: session.user.id, payload: snapshot || window.profitSyncBridge.snapshot() })
       }, session.access_token);
-      const now = new Date().toISOString();
-      lastRemoteUpdatedAt = now;
+      // Use the timestamp returned by the server, never the device clock:
+      // clocks on phones and computers differ, and comparing them made
+      // updates on one device invisible on the other.
+      const serverAt = Array.isArray(result) ? result[0]?.updated_at : result?.updated_at;
+      if (serverAt) {
+        lastRemoteUpdatedAt = serverAt;
+        localStorage.setItem(lastSyncedKey, serverAt);
+      }
       localStorage.setItem('profitLocalUpdatedAt', String(Date.now()));
-      localStorage.setItem(lastSyncedKey, now);
+      localStorage.setItem(dirtyKey, '0');
       status('Синхронизировано. Изменения появятся на других устройствах в течение нескольких секунд.');
     } catch {
       status('Не удалось сохранить в облако. Проверю соединение и попробую ещё раз.');
-    } finally { busy = false; }
+    } finally {
+      busy = false;
+      if (pendingPush) { pendingPush = false; setTimeout(() => pushRemote(), 80); }
+    }
   }
   async function pullRemote() {
-    if (!session || !ready() || busy) return;
+    if (!session || !ready()) return;
+    if (busy) { pendingPush = true; return; }
     busy = true;
     try {
       const rows = await request(`/rest/v1/profit_sync?select=payload,updated_at&user_id=eq.${encodeURIComponent(session.user.id)}`, {}, session.access_token);
@@ -126,8 +145,6 @@
       const localSnapshot = window.profitSyncBridge.snapshot();
       const localHasData = hasFinanceData(localSnapshot);
       const lastSynced = localStorage.getItem(lastSyncedKey) || '';
-      const localAt = Number(localStorage.getItem('profitLocalUpdatedAt') || 0);
-      const syncedAt = Date.parse(lastSynced) || 0;
       if (!row) {
         if (localHasData) { busy = false; await pushRemote(localSnapshot); }
         else status('Подключено. В облаке пока нет записей. Добавьте доход или трату — они появятся на всех устройствах.');
@@ -135,43 +152,52 @@
         return;
       }
       const remoteUpdatedAt = row.updated_at || '';
-      const remoteAt = Date.parse(remoteUpdatedAt) || 0;
       const remoteHasData = hasFinanceData(row.payload || {});
-      const localDirty = !lastSynced || localAt > syncedAt + 1200;
       if (!lastSynced && localHasData && remoteHasData) {
         const merged = mergeSnapshots(localSnapshot, row.payload || {});
         window.profitSyncBridge.applySnapshot(merged);
         localStorage.setItem(lastSyncedKey, remoteUpdatedAt || new Date().toISOString());
+        localStorage.setItem(dirtyKey, '0');
         busy = false;
         await pushRemote(merged);
         status('Данные с двух устройств объединены и сохранены в облаке.');
         enablePolling();
         return;
       }
-      if (localDirty && (localHasData || !remoteHasData)) {
+      if (localStorage.getItem(dirtyKey) === '1') {
         busy = false;
         await pushRemote(localSnapshot);
         enablePolling();
         return;
       }
-      if (remoteHasData && remoteAt > syncedAt + 1200) {
-        window.profitSyncBridge.applySnapshot(row.payload || {});
-        localStorage.setItem('profitLocalUpdatedAt', String(remoteAt));
+      if (localHasData && !remoteHasData) {
+        busy = false;
+        await pushRemote(localSnapshot);
+        enablePolling();
+        return;
+      }
+      if (remoteUpdatedAt && remoteUpdatedAt !== lastSynced) {
+        if (remoteHasData || !localHasData) {
+          window.profitSyncBridge.applySnapshot(row.payload || {});
+          status('Данные обновлены из облака.');
+        }
         localStorage.setItem(lastSyncedKey, remoteUpdatedAt);
-        status('Данные обновлены из облака.');
-      } else {
-        if (!lastSynced) localStorage.setItem(lastSyncedKey, remoteUpdatedAt || new Date().toISOString());
-        status('Синхронизация включена. Проверяю изменения каждые 12 секунд.');
+        localStorage.setItem('profitLocalUpdatedAt', String(Date.parse(remoteUpdatedAt) || Date.now()));
       }
       lastRemoteUpdatedAt = remoteUpdatedAt;
+      status('Синхронизация включена. Проверяю изменения каждые 12 секунд.');
       enablePolling();
     } catch {
       status('Пока не удаётся связаться с Supabase. Проверьте подключение и настройки.');
       enablePolling();
-    } finally { busy = false; }
+    } finally {
+      busy = false;
+      if (pendingPush) { pendingPush = false; setTimeout(() => pushRemote(), 80); }
+    }
   }
   function queueSave(snapshot) {
     if (!session || !ready()) return;
+    localStorage.setItem(dirtyKey, '1');
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => pushRemote(snapshot), 650);
   }
