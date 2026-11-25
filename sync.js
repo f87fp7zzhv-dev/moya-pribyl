@@ -315,11 +315,18 @@
     $('#saveNewPassword')?.addEventListener('click', saveNewPassword);
     $('#cancelPassword')?.addEventListener('click', () => $('#passwordModal')?.classList.remove('open'));
     updateControls();
-    if (!ready()) { status('Чтобы входить на всех устройствах, откройте «Настройки подключения» и укажите адрес проекта Supabase и публичный ключ.'); return; }
-    if (await handleMagicLink()) return;
+    if (!ready()) {
+      status('Чтобы входить на всех устройствах, откройте «Настройки подключения» и укажите адрес проекта Supabase и публичный ключ.');
+      window.dispatchEvent(new Event('profit-auth-checked'));
+      return;
+    }
+    if (await handleMagicLink()) { window.dispatchEvent(new Event('profit-auth-checked')); return; }
     session = readSession();
     if (session) await startSync();
     else status('Введите почту и пароль, чтобы открыть свои данные.');
+    // Tells the welcome screen that the saved session was validated, so it can
+    // enter the app automatically without asking for credentials again.
+    window.dispatchEvent(new Event('profit-auth-checked'));
   });
   window.addEventListener('focus', () => { if (session) pullRemote(); });
   window.addEventListener('online', () => { if (session) pullRemote(); });
