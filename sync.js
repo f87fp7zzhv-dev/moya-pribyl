@@ -5,6 +5,10 @@
   // works on any device without copying settings from the computer.
   const DEFAULT_URL = 'https://qsqwjpcfluxtlbmmojkv.supabase.co';
   const DEFAULT_ANON = 'sb_publishable_lB_oSwd4Q_W1dAOJU1QnNQ_Pmf4vTyr';
+  // Nickname is the only thing the user types. Supabase still needs an email
+  // internally, so a stable address is derived from the nickname.
+  const LOGIN_DOMAIN = '@moya-pribyl.app';
+  const emailFor = nickname => nickname.toLowerCase().replace(/[^a-z0-9_.-]/g, '') + LOGIN_DOMAIN;
   const sessionKey = 'profitSupabaseSession';
   const lastSyncedKey = 'profitLastSyncedAt';
   const dirtyKey = 'profitLocalDirty';
@@ -94,8 +98,10 @@
     if (signOut) signOut.hidden = !s?.access_token;
     const account = $('#welcomeAccount');
     if (account) {
-      account.hidden = !s?.user?.email;
-      account.textContent = s?.user?.email ? 'Вы вошли как ' + s.user.email : '';
+      const email = s?.user?.email || '';
+      const label = email.endsWith(LOGIN_DOMAIN) ? email.slice(0, -LOGIN_DOMAIN.length) : email;
+      account.hidden = !label;
+      account.textContent = label ? 'Вы вошли как ' + label : '';
     }
     window.dispatchEvent(new Event('profit-session-changed'));
   }
@@ -245,10 +251,11 @@
   }
   async function passwordAuth(signUp) {
     if (!ready()) { status('Сначала сохраните адрес проекта Supabase и публичный ключ в настройках подключения.'); return; }
-    const email = ($('#syncEmail')?.value || '').trim();
+    const nickname = ($('#syncNickname')?.value || '').trim().toLowerCase();
     const password = $('#syncPassword')?.value || '';
-    if (!email || !email.includes('@')) { status('Введите корректный e-mail.'); return; }
+    if (!/^[a-z0-9_.-]{3,30}$/.test(nickname)) { status('Никнейм: от 3 до 30 символов — латинские буквы, цифры, точка, дефис или подчёркивание.'); return; }
     if (password.length < 8) { status('Введите пароль длиной не менее 8 символов.'); return; }
+    const email = emailFor(nickname);
     status(signUp ? 'Создаю аккаунт…' : 'Выполняю вход…');
     try {
       const body = await request(signUp ? '/auth/v1/signup' : '/auth/v1/token?grant_type=password', {
@@ -262,27 +269,17 @@
         await startSync();
         notifySignedIn();
       } else if (signUp) {
-        status('Аккаунт создан. Подтвердите e-mail по ссылке из письма, затем войдите с паролем.');
+        status('Аккаунт создан. Войдите с этим никнеймом и паролем.');
       } else {
-        status('Аккаунт создан без сессии. Проверьте подтверждение e-mail или повторите вход.');
+        status('Не удалось получить сессию. Повторите вход с тем же никнеймом и паролем.');
       }
     } catch (error) {
       $('#syncPassword').value = '';
       status(`Не удалось ${signUp ? 'создать аккаунт' : 'войти'} (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
     }
   }
-  async function recoverPassword() {
-    if (!ready()) { status('Подключение к Supabase ещё не настроено.'); return; }
-    const email = ($('#syncEmail')?.value || '').trim();
-    if (!email || !email.includes('@')) { status('Введите почту, на которую придёт ссылка для смены пароля.'); return; }
-    status('Отправляю ссылку для смены пароля…');
-    try {
-      const redirect = encodeURIComponent(location.origin + location.pathname);
-      await request(`/auth/v1/recover?redirect_to=${redirect}`, { method: 'POST', body: JSON.stringify({ email }) });
-      status('Ссылка отправлена. Откройте её в почте и задайте новый пароль.');
-    } catch (error) {
-      status(`Не удалось отправить ссылку (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
-    }
+  function recoverPassword() {
+    status('При входе по никнейму восстановление по почте недоступно. Если забыли пароль — нажмите «Создать аккаунт» и придумайте новый никнейм с паролем.');
   }
   async function saveNewPassword() {
     const password = ($('#newPassword')?.value || '').trim();
