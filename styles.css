@@ -19,7 +19,9 @@ html:not(.welcome-done) .app{visibility:hidden}
 @keyframes welcome-rise{to{opacity:1;transform:translateY(0) scale(1)}}
 @media(max-width:520px){#welcomeScreen{padding:20px 18px}.welcome-icon{width:106px;height:106px;border-radius:29px}.welcome-title{margin-top:25px}.welcome-subtitle{font-size:14px}.welcome-enter{width:min(100%,320px);margin-top:30px;min-height:54px}}
 @media(prefers-reduced-motion:reduce){#welcomeScreen,.welcome-icon,.welcome-title,.welcome-subtitle,.welcome-enter{animation:none!important;transition:none!important;opacity:1;transform:none}.welcome-enter{pointer-events:auto}.welcome-inner:not(.ready) .welcome-enter{opacity:1}}
-.welcome-login{width:min(100%,360px);margin-top:22px;display:flex;flex-direction:column;gap:2px;text-align:left}
+.welcome-login{width:min(100%,320px);margin-top:30px;display:flex;flex-direction:column;gap:10px;text-align:left}
+.welcome-login>input{width:100%;min-width:0;background:var(--surface2);border:1px solid var(--line);border-radius:13px;padding:14px;color:var(--text);outline:none}
+.welcome-login>input:focus{border-color:var(--green)}
 .welcome-login[hidden],.welcome-config[hidden]{display:none}
 .welcome-login .field{margin-bottom:10px;gap:5px}
 .welcome-login .field label{font-size:11px}

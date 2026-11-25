@@ -9,6 +9,9 @@
   // internally, so a stable address is derived from the nickname.
   const LOGIN_DOMAIN = '@moya-pribyl.app';
   const emailFor = nickname => nickname.toLowerCase().replace(/[^a-z0-9_.-]/g, '') + LOGIN_DOMAIN;
+  // The user types only a nickname. Supabase still authenticates with a
+  // password, derived from the nickname so it never has to be remembered.
+  const passwordFor = nickname => 'mp_' + nickname + '_login';
   const sessionKey = 'profitSupabaseSession';
   const lastSyncedKey = 'profitLastSyncedAt';
   const dirtyKey = 'profitLocalDirty';
@@ -94,15 +97,10 @@
   }
   function updateControls() {
     const s = readSession();
-    const signOut = $('#welcomeSignOut');
-    if (signOut) signOut.hidden = !s?.access_token;
-    const account = $('#welcomeAccount');
-    if (account) {
-      const email = s?.user?.email || '';
-      const label = email.endsWith(LOGIN_DOMAIN) ? email.slice(0, -LOGIN_DOMAIN.length) : email;
-      account.hidden = !label;
-      account.textContent = label ? 'Вы вошли как ' + label : '';
-    }
+    const email = s?.user?.email || '';
+    const nickname = email.endsWith(LOGIN_DOMAIN) ? email.slice(0, -LOGIN_DOMAIN.length) : email;
+    const avatar = $('.avatar');
+    if (avatar) avatar.title = nickname ? 'Никнейм: ' + nickname : '';
     window.dispatchEvent(new Event('profit-session-changed'));
   }
   function notifySignedIn() {
@@ -213,7 +211,7 @@
   }
   async function startSync() {
     const user = await authenticatedUser();
-    if (!user) { updateControls(); status('Войдите по почте и паролю, чтобы открыть свои данные.'); return; }
+    if (!user) { updateControls(); status('Введите никнейм, чтобы открыть свои данные.'); return; }
     session = { ...session, user };
     writeSession(session);
     updateControls();
@@ -226,73 +224,40 @@
     const accessToken = hash.get('access_token');
     const refreshToken = hash.get('refresh_token');
     if (!accessToken || !refreshToken) return false;
-    const recovery = hash.get('type') === 'recovery';
     const expiresIn = Number(hash.get('expires_in') || 3600);
     writeSession({ access_token: accessToken, refresh_token: refreshToken, expires_at: Math.floor(Date.now() / 1000) + expiresIn });
     history.replaceState(null, '', location.pathname + location.search);
-    status(recovery ? 'Ссылка подтверждена. Задайте новый пароль.' : 'Вход подтверждён. Подключаю облако…');
+    status('Вход подтверждён. Подключаю облако…');
     await startSync();
-    if (recovery) $('#passwordModal')?.classList.add('open');
-    else notifySignedIn();
+    notifySignedIn();
     return true;
   }
-  function saveConfig() {
-    const urlInput = $('#supabaseUrl'), keyInput = $('#supabaseAnonKey');
-    const url = (urlInput?.value || '').trim().replace(/\/$/, '');
-    const anon = (keyInput?.value || '').trim();
-    try { if (new URL(url).protocol !== 'https:') throw new Error(); } catch { status('Введите корректный HTTPS-адрес проекта Supabase.'); return; }
-    if (!anon) { status('Вставьте публичный ключ anon/publishable из настроек проекта.'); return; }
-    localStorage.setItem(cfgKeys.url, url);
-    localStorage.setItem(cfgKeys.anon, anon);
-    localStorage.removeItem(lastSyncedKey);
-    writeSession(null);
-    updateControls();
-    status('Настройки сохранены на этом устройстве. Теперь войдите по почте и паролю.');
-  }
-  async function passwordAuth(signUp) {
-    if (!ready()) { status('Сначала сохраните адрес проекта Supabase и публичный ключ в настройках подключения.'); return; }
+  async function nicknameSignIn() {
+    if (!ready()) { status('Подключение к Supabase ещё не настроено.'); return; }
     const nickname = ($('#syncNickname')?.value || '').trim().toLowerCase();
-    const password = $('#syncPassword')?.value || '';
     if (!/^[a-z0-9_.-]{3,30}$/.test(nickname)) { status('Никнейм: от 3 до 30 символов — латинские буквы, цифры, точка, дефис или подчёркивание.'); return; }
-    if (password.length < 8) { status('Введите пароль длиной не менее 8 символов.'); return; }
     const email = emailFor(nickname);
-    status(signUp ? 'Создаю аккаунт…' : 'Выполняю вход…');
+    const password = passwordFor(nickname);
+    status('Вхожу…');
     try {
-      const body = await request(signUp ? '/auth/v1/signup' : '/auth/v1/token?grant_type=password', {
-        method: 'POST', body: JSON.stringify({ email, password })
-      });
-      $('#syncPassword').value = '';
-      if (body?.access_token && body?.refresh_token) {
-        writeSession({ ...body, expires_at: Math.floor(Date.now() / 1000) + Number(body.expires_in || 3600) });
-        updateControls();
-        status('Вход выполнен. Подключаю данные…');
-        await startSync();
-        notifySignedIn();
-      } else if (signUp) {
-        status('Аккаунт создан. Войдите с этим никнеймом и паролем.');
-      } else {
-        status('Не удалось получить сессию. Повторите вход с тем же никнеймом и паролем.');
+      const credentials = { method: 'POST', body: JSON.stringify({ email, password }) };
+      let body;
+      try {
+        body = await request('/auth/v1/token?grant_type=password', credentials);
+      } catch (error) {
+        if (Number(error?.status) !== 400) throw error;
+        // Account does not exist yet — create it and use the returned session.
+        body = await request('/auth/v1/signup', credentials);
+        if (!body?.access_token) body = await request('/auth/v1/token?grant_type=password', credentials);
       }
-    } catch (error) {
-      $('#syncPassword').value = '';
-      status(`Не удалось ${signUp ? 'создать аккаунт' : 'войти'} (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
-    }
-  }
-  function recoverPassword() {
-    status('При входе по никнейму восстановление по почте недоступно. Если забыли пароль — нажмите «Создать аккаунт» и придумайте новый никнейм с паролем.');
-  }
-  async function saveNewPassword() {
-    const password = ($('#newPassword')?.value || '').trim();
-    if (password.length < 8) { status('Введите пароль длиной не менее 8 символов.'); return; }
-    status('Сохраняю новый пароль…');
-    try {
-      await request('/auth/v1/user', { method: 'PUT', body: JSON.stringify({ password }) }, session.access_token);
-      $('#passwordModal')?.classList.remove('open');
-      $('#newPassword').value = '';
+      if (!body?.access_token || !body?.refresh_token) { status('Не получилось войти. Попробуйте другой никнейм.'); return; }
+      writeSession({ ...body, expires_at: Math.floor(Date.now() / 1000) + Number(body.expires_in || 3600) });
+      updateControls();
+      status('Вход выполнен. Подключаю данные…');
+      await startSync();
       notifySignedIn();
-      status('Пароль обновлён. Теперь можно входить с ним на всех устройствах.');
     } catch (error) {
-      status(`Не удалось сменить пароль (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
+      status(`Не удалось войти (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
     }
   }
   function signOut() {
@@ -304,23 +269,16 @@
     status('Вы вышли из аккаунта. Локальные записи на этом устройстве сохранены.');
   }
   document.addEventListener('DOMContentLoaded', async () => {
-    const c = config();
-    if ($('#supabaseUrl')) $('#supabaseUrl').value = c.url;
-    if ($('#supabaseAnonKey')) $('#supabaseAnonKey').value = c.anon;
-    $('#saveSupabaseConfig')?.addEventListener('click', saveConfig);
-    $('#welcomeRecover')?.addEventListener('click', recoverPassword);
-    $('#saveNewPassword')?.addEventListener('click', saveNewPassword);
-    $('#cancelPassword')?.addEventListener('click', () => $('#passwordModal')?.classList.remove('open'));
     updateControls();
     if (!ready()) {
-      status('Чтобы входить на всех устройствах, откройте «Настройки подключения» и укажите адрес проекта Supabase и публичный ключ.');
+      status('Подключение к Supabase не настроено.');
       window.dispatchEvent(new Event('profit-auth-checked'));
       return;
     }
     if (await handleMagicLink()) { window.dispatchEvent(new Event('profit-auth-checked')); return; }
     session = readSession();
     if (session) await startSync();
-    else status('Введите почту и пароль, чтобы открыть свои данные.');
+    else status('Введите никнейм, чтобы открыть свои данные.');
     // Tells the welcome screen that the saved session was validated, so it can
     // enter the app automatically without asking for credentials again.
     window.dispatchEvent(new Event('profit-auth-checked'));
@@ -331,7 +289,7 @@
     queueSave,
     refresh: pullRemote,
     signOut,
-    passwordSignIn: passwordAuth,
+    nicknameSignIn,
     isSignedIn: () => Boolean(readSession()?.access_token),
     onSignedIn: null
   };
