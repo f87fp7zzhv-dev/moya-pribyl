@@ -15,6 +15,7 @@
   const sessionKey = 'profitSupabaseSession';
   const lastSyncedKey = 'profitLastSyncedAt';
   const dirtyKey = 'profitLocalDirty';
+  const wipeKey = 'profitWipeToken';
   let session = null;
   let lastRemoteUpdatedAt = '';
   let saveTimer = 0;
@@ -119,7 +120,15 @@
       const result = await request('/rest/v1/profit_sync?on_conflict=user_id', {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-        body: JSON.stringify({ user_id: session.user.id, payload: snapshot || window.profitSyncBridge.snapshot() })
+        body: JSON.stringify({
+          user_id: session.user.id,
+          payload: (() => {
+            const payload = { ...(snapshot || window.profitSyncBridge.snapshot()) };
+            const wipeToken = localStorage.getItem(wipeKey);
+            if (wipeToken) payload.wipeToken = wipeToken;
+            return payload;
+          })()
+        })
       }, session.access_token);
       // Use the timestamp returned by the server, never the device clock:
       // clocks on phones and computers differ, and comparing them made
@@ -148,6 +157,21 @@
     try {
       const rows = await request(`/rest/v1/profit_sync?select=payload,updated_at&user_id=eq.${encodeURIComponent(session.user.id)}`, {}, session.access_token);
       const row = Array.isArray(rows) ? rows[0] : null;
+      // A wipe token in the cloud is an explicit "clear local records on every
+      // device" command. It also overrides unsynced local changes.
+      const remoteWipe = row?.payload?.wipeToken || '';
+      const localWipe = localStorage.getItem(wipeKey) || '';
+      if (remoteWipe && remoteWipe !== localWipe) {
+        window.profitSyncBridge.applySnapshot(row.payload || {});
+        localStorage.setItem(wipeKey, remoteWipe);
+        localStorage.setItem(dirtyKey, '0');
+        localStorage.setItem(lastSyncedKey, row.updated_at || '');
+        status('Записи очищены на этом устройстве по команде из облака.');
+        busy = false;
+        await pushRemote(window.profitSyncBridge.snapshot());
+        enablePolling();
+        return;
+      }
       const localSnapshot = window.profitSyncBridge.snapshot();
       const localHasData = hasFinanceData(localSnapshot);
       const lastSynced = localStorage.getItem(lastSyncedKey) || '';
