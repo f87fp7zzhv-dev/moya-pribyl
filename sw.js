@@ -1,10 +1,10 @@
-const CACHE_NAME = "moya-pribyl-pwa-v18";
+const CACHE_NAME = "moya-pribyl-pwa-v19";
 const APP_FILES = [
   "./",
   "./index.html",
-  "./styles.css",
-  "./app.js",
-  "./sync.js",
+  "./styles.css?v=19",
+  "./app.js?v=19",
+  "./sync.js?v=19",
   "./manifest.webmanifest",
   "./maia-icon.svg",
   "./maia-icon.png",

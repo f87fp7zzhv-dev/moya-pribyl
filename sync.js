@@ -257,7 +257,10 @@
       await startSync();
       notifySignedIn();
     } catch (error) {
-      status(`Не удалось войти (${error?.status || 'сетевая ошибка'}): ${error?.message || 'ошибка Supabase'}`);
+      const message = error?.message || 'ошибка Supabase';
+      status(/already registered|email_exists/i.test(message)
+        ? 'Аккаунт уже есть, но открытая версия приложения устарела. Закрой приложение и открой его заново, затем войди с тем же никнеймом.'
+        : `Не удалось войти (${error?.status || 'сетевая ошибка'}): ${message}`);
     }
   }
   function signOut() {
