@@ -287,6 +287,8 @@
     window.dispatchEvent(new Event('profit-auth-checked'));
   });
   window.addEventListener('focus', () => { if (session) pullRemote(); });
+  // iOS often fires visibilitychange but not focus when returning to a PWA.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && session) pullRemote(); });
   window.addEventListener('online', () => { if (session) pullRemote(); });
   window.profitCloudSync = {
     queueSave,

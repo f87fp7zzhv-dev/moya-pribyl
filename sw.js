@@ -1,10 +1,10 @@
-const CACHE_NAME = "moya-pribyl-pwa-v19";
+const CACHE_NAME = "moya-pribyl-pwa-v20";
 const APP_FILES = [
   "./",
   "./index.html",
-  "./styles.css?v=19",
-  "./app.js?v=19",
-  "./sync.js?v=19",
+  "./styles.css?v=20",
+  "./app.js?v=20",
+  "./sync.js?v=20",
   "./manifest.webmanifest",
   "./maia-icon.svg",
   "./maia-icon.png",
@@ -29,6 +29,9 @@ self.addEventListener("fetch", event => {
   const request = event.request;
   if (request.method !== "GET" || !request.url.startsWith("http")) return;
   const sameOrigin = new URL(request.url).origin === self.location.origin;
+  // Never intercept Supabase/API traffic — the browser handles cross-origin
+  // requests (and their CORS errors) correctly on its own.
+  if (!sameOrigin) return;
   event.respondWith(
     fetch(request)
       .then(response => {
